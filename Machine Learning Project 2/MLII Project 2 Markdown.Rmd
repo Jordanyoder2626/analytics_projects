@@ -1,0 +1,280 @@
+---
+title: "MLII Project 2 Markdown"
+output: html_document
+date: "2023-02-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(caret) #For confusionMatrix(), training ML models, and more
+library(neuralnet) #For neuralnet() function
+library(dplyr) #For some data manipulation and ggplot
+library(pROC)  #For ROC curve and estimating the area under the ROC curve
+library(fastDummies) #To create dummy variable (one hot encoding)
+library(tidyr)
+library(MLmetrics)
+
+
+
+
+```
+
+
+
+```{r}
+
+bnb = read.csv("AirbnbListings.csv", sep = ",", stringsAsFactors = TRUE)
+summary(bnb)
+
+
+
+```
+
+```{r}
+#creating dummy variables for categorical variables
+bnb_dummies = dummy_cols(bnb, select_columns = c('superhost', 'room_type', 'neighborhood'))
+
+#selecting against variables that are not needed, or redundant in the case of the dummy variables
+final_data = 
+  bnb_dummies %>% select(-c(listing_id, host_since, neighborhood, superhost, room_type, neighborhood_Takoma, superhost_FALSE, room_type_NA, room_type))
+
+#creating test and training sets for the data
+set.seed(999888)  # Set a seed for reproducibility
+index = sample(nrow(final_data),0.7*nrow(final_data)) 
+
+train_data = final_data[index, ]
+test_data = final_data[-index, ]
+
+```
+
+```{r}
+#Cleaning data
+
+#Check for columns/variables with missing values
+sapply(train_data, function(x){sum(is.na(x))})
+sapply(test_data, function(x){sum(is.na(x))})
+
+#setting acceptance rate to average of dataset
+train_data$host_acceptance_rate[is.na(train_data$host_acceptance_rate)] = mean(train_data$host_acceptance_rate, na.rm = T)
+test_data$host_acceptance_rate[is.na(test_data$host_acceptance_rate)] = mean(test_data$host_acceptance_rate, na.rm = T)
+
+sum(is.na(train_data$total_reviews))/nrow(train_data)
+sum(is.na(test_data$total_reviews))/nrow(test_data)
+#total review NAs are around 1% of the data, so it is reasonable to remove them from our dataset
+
+train_data = train_data %>% drop_na(total_reviews)
+test_data = test_data %>% drop_na(total_reviews)
+
+#remaining data has less than 1% so we will omit it
+train_data = na.omit(train_data)
+test_data = na.omit(test_data)
+
+#need to update the column names
+
+colnames(train_data) = c("hostacceptancerate", "hosttotallistings","accommodates","beds", "minnights", "totalreviews", "avgrating", "price","superhostTRUE", "roomtypeEntireHomeapt", "roomtypePrivateRoom", "roomtypeSharedRoom", "neighborhoodBellevue", "neighborhoodCapitolHill", "neighborhoodDowntown", "neighborhoodDupontCircle", "neighborhoodFortMcNair", "neighborhoodGeorgetown", "neighborhood_Petworth")
+
+colnames(test_data) = c("hostacceptancerate", "hosttotallistings","accommodates","beds", "minnights", "totalreviews", "avgrating", "price","superhostTRUE", "roomtypeEntireHomeapt", "roomtypePrivateRoom", "roomtypeSharedRoom", "neighborhoodBellevue", "neighborhoodCapitolHill", "neighborhoodDowntown", "neighborhoodDupontCircle", "neighborhoodFortMcNair", "neighborhoodGeorgetown", "neighborhood_Petworth")
+
+
+```
+```{r}
+#We are using preProcess function from "caret" package, using "range" (min-max normalization) method
+#Again, we are using train information to scale test data!
+#NOTE: Predictors that are not numeric are ignored in the calculations of preProcess function
+set.seed(999888)  # Set a seed for reproducibility
+scale_vals = preProcess(train_data, method="range") 
+train_data_s = predict(scale_vals, train_data)
+test_data_s = predict(scale_vals, test_data)
+```
+
+```{r}
+set.seed(999888)  # Set a seed for reproducibility
+NN1 = neuralnet(price ~ .,
+                data=train_data_s,
+                linear.output = TRUE,
+                hidden=5)
+
+
+
+# Predict on test data
+pr.nn <- predict(NN1, test_data_s)
+descale =  pr.nn*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+
+MAE = MAE(descale, test_data$price)
+RMSE = sqrt(mean((test_data$price - descale)^2))
+r_2 = cor(test_data$price, descale)^2
+
+
+
+
+
+
+```
+
+```{r}
+plot(test_data$price, descale,col='red',main='Real vs predicted NN')
+abline(0,1,lwd=2)
+```
+
+
+```{r}
+plot(NN1) #Plot of the network architecture and its weights
+```
+
+
+
+
+```{r}
+#A network with 2 layers. Layer 1 with five and layer 2 with three hidden neurons
+#One can also change the algorithm to other ones such as "backprop", the classic backpropogation algorithm.
+#In doing so, we can also set a learningrate, a numeric value specifying the learning rate used by the algorithm 
+#Warning: If the model does not converge, you can increase stepmax or change some of the parameters
+set.seed(999888)  # Set a seed for reproducibility
+NN2 = neuralnet(price ~.,
+                data=train_data_s,
+                linear.output = TRUE,
+                stepmax = 1e+06,
+                hidden=c(5,3))
+
+
+# Predict on test data
+pr.nn2 <- predict(NN2, test_data_s)
+descale2 =  pr.nn2*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+
+
+MAE2 = MAE(descale2, test_data$price)
+RMSE2 = sqrt(mean((test_data$price - descale2)^2))
+r_2_2 = cor(test_data$price, descale2)^2
+
+
+
+
+
+
+```
+
+```{r}
+plot(test_data$price, descale2,col='red',main='Real vs predicted NN')
+abline(0,1,lwd=2)
+```
+
+
+```{r}
+
+plot(NN2)
+```
+
+
+
+```{r}
+
+# We can set our cross validation parameters using trainControl()
+# Specify 10-fold cross validation
+# classProbs=T makes sure probabilities are also calculated and can be accessed later
+ctrl = trainControl(method="cv",number=10)
+
+
+# train() is a general function from caret package that can handle many methods
+# Here we're training a neural network based on "nnet" package
+# "nnet" trains a single layer neural network
+# it uses sigmoid activation function ... algorithm?
+set.seed(999888)  # Set a seed for reproducibility
+NN_caret1 = train(
+  price ~ ., data = train_data_s,
+  method = "nnet", 
+  trControl = ctrl,
+  trace=FALSE, #this parameter disables printing outputs during training
+  linout = TRUE) 
+
+NN_caret1
+
+RMSE3 = NN_caret1$results[9,3]
+MAE3 = NN_caret1$results[9,5]
+r_2_3 = NN_caret1$results[9,4]
+
+```
+
+
+```{r}
+#In search of the best set of hyperparameters, we can customize a grid search
+
+myGrid = expand.grid(size = c(1,2,3,4,5,6),
+                     decay = c(0.0001,0.001,0.01,0.1))
+
+set.seed(999888)  # Set a seed for reproducibility
+NN_caret2 = train(
+  price ~ ., data = train_data_s,
+  method = "nnet", 
+  trControl = ctrl,
+  tuneGrid = myGrid,
+  trace=FALSE,  #this parameter disables printing outputs during training
+  linout = TRUE) 
+
+NN_caret2
+
+RMSE4 = NN_caret2$results[15,3]
+MAE4 = NN_caret2$results[15,5]
+r_2_4 = NN_caret2$results[15,4]
+
+pr.nn4 = predict(NN_caret2, test_data_s)
+descale4 = pr.nn4*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+
+
+
+```
+
+```{r}
+
+plot(test_data$price, descale4,col='red',main='Real vs predicted NN')
+abline(0,1,lwd=2)
+```
+
+
+
+
+```{r}
+plot(NN_caret1)
+```
+
+
+
+```{r}
+
+plot(NN_caret2)
+```
+
+```{r}
+
+#Comparing models:
+#NN1: a model trained using neuralet with 1 layer and two hidden neurons (rprop+)
+#NN2: a model trained using neuralet with 2 layers, with five and two hidden neurons (backprop)
+#NN_caret1: best tuned model based on 10-fold CV using nnet package and default grid search
+#NN_caret2: best tuned model based on 10-fold CV using nnet package and customized grid search
+
+RMSE3_=RMSE3*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+RMSE4_ = RMSE4*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+MAE3_ = MAE3*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+MAE4_ = MAE4*(max(train_data$price)-min(train_data$price))+min(train_data$price)
+
+tbl = data.frame(RMSE= c(RMSE,RMSE2,RMSE3_,RMSE4_),
+                 MAE = c(MAE, MAE2,MAE3_,MAE4_),
+                 R_Squared = c(r_2,r_2_2,r_2_3,r_2_4))
+
+rownames(tbl) = c('NN1', 'NN2', 'NN_caret1', 'NN_caret2')
+tbl
+
+#best 2 Models
+tbl[c(1,4),]
+```
+
+
+```{r}
+print("NN1: ")
+postResample(pr.nn, test_data$price)
+print("NN_Caret2:")
+postResample(pr.nn4, test_data$price)
+```
+
