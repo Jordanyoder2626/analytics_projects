@@ -1,5 +1,5 @@
 # analytics_projects
-## This repository houses analytics projects showcasing various ML techniques using R and Python
+## This repository houses analytics projects showcasing various ML techniques using R and Python used throughout coursework
 
 
 ### Capstone
